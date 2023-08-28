@@ -161,5 +161,4 @@ export default useSocket
 - whisper
 - convert Link from chatting
 
-
-![convert link](<스크린샷 2023-08-28 오후 10.38.40.png>)
+![convert link](convertlink.png)
