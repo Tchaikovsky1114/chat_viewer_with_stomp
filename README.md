@@ -1,46 +1,159 @@
-# Getting Started with Create React App
+# 두 번째 개인제작 라이브러리: RS_Chat
 
-This project was bootstrapped with [Create React App](https://github.com/facebook/create-react-app).
 
-## Available Scripts
+## 훅을 통한 간단한 서버 - 클라이언트의 웹소켓 통신
 
-In the project directory, you can run:
+```ts
+import { useCallback, useContext, useEffect, useState } from 'react';
+import SockJS from 'sockjs-client';
+import {Client, StompSubscription} from '@stomp/stompjs';
+import UserContext from '../context/UserContext';
 
-### `npm start`
+interface Props {
+  serverPath: string;
+  clientPath: string;
+  excuteBeforeComponentMount: (() => void)[];
+}
+export interface Message {
+  username: string;
+  content: string;
+  date: string;
+  to?: string;
+  from?: string;
+} 
+interface PublishConfig<T> {
+  destination: string;
+  body: T ;
+  headers?: Record<string, string>;
+}
 
-Runs the app in the development mode.\
-Open [http://localhost:3000](http://localhost:3000) to view it in the browser.
+interface User {
+  name: string;
+  token: string;
+}
 
-The page will reload if you make edits.\
-You will also see any lint errors in the console.
+type Subscribe = (path:string, callback:() => void) => void;
+type Publish = <T>({destination, body, headers}:PublishConfig<T>) => void;
 
-### `npm test`
+let socket: Client;
 
-Launches the test runner in the interactive watch mode.\
-See the section about [running tests](https://facebook.github.io/create-react-app/docs/running-tests) for more information.
+const subscriptions: Record<string,StompSubscription> = {};
 
-### `npm run build`
+function useSocket({serverPath, clientPath, excuteBeforeComponentMount}:Props) {
+  const { chatToken } = useContext(UserContext);
+  const [chat, setChat] = useState<Message[]>([]);
+  const [userList, setUserList] = useState<User[]>([]);
+  const [totalNum, setTotalNum] = useState(0);
+  
+  const clearChat = useCallback(() => {
+    setChat([]);
+  },[])
+  
+  const generateSocket = (token:string) => {
+    
+    socket = new Client({
+      
+      // 사용자가 url 입력할 수 있게끔 수정 필요
+      webSocketFactory: () => new SockJS('http://192.168.219.110:8080/ws'),
+      // 사용자의 디버깅 요청에 따라 바뀔 수 있게 수정 필요
+      // debug: (str) => {
+      //   console.log(str)
+      // },
+      // 사용자의 원하는 커스텀 해더 가능하게 수정 필요
+      connectHeaders: {
+        login: token,
+        passcode: token,
+        something: 'anything'
+      },
+      // 사용자가 원하는 시간대로 변할 수 있게끔 수정 필요
+      reconnectDelay: 5000,
+      heartbeatIncoming: 3000,
+      heartbeatOutgoing: 30000,
+    })
+    socket.onConnect = (frame) => {
 
-Builds the app for production to the `build` folder.\
-It correctly bundles React in production mode and optimizes the build for the best performance.
+      socket.subscribe(serverPath,(message) => {
+        const payload = JSON.parse(message.body);
+        if(payload.username) setChat((prev) => [...prev, {content:payload.content, username:payload.username, date:payload.date}]);
+      });
+      
+      socket.subscribe(`${serverPath}/join`,(message) => {
+        setUserList(Object.values(JSON.parse(message.body)));
+      });
 
-The build is minified and the filenames include the hashes.\
-Your app is ready to be deployed!
+      socket.subscribe(`${serverPath}/userlist`,(message) => {
+        setUserList(Object.values(JSON.parse(message.body)));
+      });
 
-See the section about [deployment](https://facebook.github.io/create-react-app/docs/deployment) for more information.
+      
+      socket.subscribe(`${serverPath}/infoMessage`,(message) => {
+        
+        const payload = JSON.parse(message.body);
+        setUserList((prev) => prev.filter((user) => user !== payload.prevUser));
+      });
+  
+      // 접속한 유저 수 채널
+      socket.subscribe(`${serverPath}/usercount`,(message) => {
+        const payload = JSON.parse(message.body);
+        setTotalNum(payload);
+      });
 
-### `npm run eject`
+      // 유저 연결 해제 채널
+      socket.subscribe(`${serverPath}/disconnect`,(message) => {
+        const payload = JSON.parse(message.body);
+        setUserList(payload);
+      });
 
-**Note: this is a one-way operation. Once you `eject`, you can’t go back!**
+      // 귓속말 구독 채널
+      socket.subscribe(`/queue/whisper`, (message) => {
+        const payload = JSON.parse(message.body);
+      });
 
-If you aren’t satisfied with the build tool and configuration choices, you can `eject` at any time. This command will remove the single build dependency from your project.
+      excuteBeforeComponentMount && excuteBeforeComponentMount.forEach((callback) => callback());
+    }
+  }
 
-Instead, it will copy all the configuration files and the transitive dependencies (webpack, Babel, ESLint, etc) right into your project so you have full control over them. All of the commands except `eject` will still work, but they will point to the copied scripts so you can tweak them. At this point you’re on your own.
+  const connect = useCallback((ct:string) => {
+    generateSocket(ct);
+    socket.activate();
+  },[])
 
-You don’t have to ever use `eject`. The curated feature set is suitable for small and middle deployments, and you shouldn’t feel obligated to use this feature. However we understand that this tool wouldn’t be useful if you couldn’t customize it when you are ready for it.
+  
+  const subscribe:Subscribe = useCallback((path,callback) => {
+    if(!socket || subscriptions[path]) return;
+    callback();
+    subscriptions[path] = socket.subscribe(path, callback);
+  },[]);
 
-## Learn More
+  const publish:Publish = useCallback(({destination, body, headers}) => {
+    if(!socket) return;
+    socket.publish({
+      destination,
+      body : typeof body === 'string'
+            ? body 
+            : JSON.stringify(body),
+      headers
+    });
+  },[])
 
-You can learn more in the [Create React App documentation](https://facebook.github.io/create-react-app/docs/getting-started).
 
-To learn React, check out the [React documentation](https://reactjs.org/).
+  useEffect(() => {
+    if(!chatToken) return
+      connect(chatToken);
+  },[chatToken]);
+
+  return {subscribe,publish, chat, userList, totalNum, clearChat}
+}
+
+export default useSocket
+```
+
+
+## 내장기능
+
+- public chat
+- connect / disconnect chat
+- check userlist
+- infomation chat
+- check usercount in separate chatroom
+- whisper
