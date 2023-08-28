@@ -159,3 +159,7 @@ export default useSocket
 - infomation chat
 - check usercount in separate chatroom
 - whisper
+- convert Link from chatting
+
+
+![convert link](<스크린샷 2023-08-28 오후 10.38.40.png>)
